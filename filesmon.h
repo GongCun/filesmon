@@ -75,5 +75,7 @@ void err_quit(const char *fmt, ...);
 char *mk_subdir(char *path, char *mon, int);
 int skip_lines(char **p, int n);
 void already_running(int fd);
+extern int crtfile, crtdir;
+extern int force;
 
 #endif

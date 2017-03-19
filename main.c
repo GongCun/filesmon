@@ -23,12 +23,18 @@
  * SOFTWARE.
  */
 
-/* $Id: main.c,v 1.25 2016/11/18 08:46:26 root Exp root $ */
 #include "filesmon.h"
 #include "version.h"
 
-#define OPTSTR "L:l:v"
+#define OPTSTR "L:l:vfdF"
 #undef _DEBUG
+
+#define daytime()							\
+({									\
+	if (gettimeofday(&tv, (struct timezone *)NULL) < 0)		\
+ 		err_sys("gettimeofday() error");			\
+	(int)(tv.tv_sec*1000.0 + tv.tv_usec/1000.0 + 0.5);		\
+})
 
 const char keystr[] = KEYSTR;
 FILE *Flist = NULL, *Flog = NULL;
@@ -38,7 +44,7 @@ sigset_t mask;
 
 static void usage(const char *s)
 {
-	err_quit("Usage: %s [ -v | -L <InputList> -l <LogFile> Files... ]", s);
+	err_quit("Usage: %s -v | -L <InputList> -l <LogFile> [-f|-d] [-F] Files...", s);
 }
 
 
@@ -100,6 +106,8 @@ void *thr_fn(void *arg)
 }
 
 struct monfile mf[MAXFILES];
+int crtfile, crtdir;
+int force;
 
 int main(int argc, char *argv[])
 {
@@ -130,31 +138,11 @@ int main(int argc, char *argv[])
 	char *fname;
 	char *fmon;
 	char config[PATH_MAX];
-	struct tms tms;
-	static long clktck = 0;
-	clock_t start, end;
 
 	pthread_t tid;
 	struct sigaction sa;
+	int basetime; /* millisec for calc timeout of files re-create */
 
-	sa.sa_handler = SIG_DFL;
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = 0;
-	if (sigaction(SIGHUP, &sa, NULL) < 0)
-		err_quit("sigaction SIGHUP failed");
-
-	sigemptyset(&mask);
-	sigaddset(&mask, SIGTERM);
-	sigaddset(&mask, SIGHUP);
-	if ((ret = pthread_sigmask(SIG_BLOCK, &mask, NULL)) != 0) {
-		errno = ret;
-		err_sys("pthread_sigmask error");
-	}
-
-	if ((ret = pthread_create(&tid, NULL, thr_fn, 0)) != 0) {
-		errno = ret;
-		err_sys("pthread_create error");
-	}
 
 	if (argc < 2)
 		usage(basename(argv[0]));
@@ -191,19 +179,63 @@ int main(int argc, char *argv[])
 			case 'v':
 				version();
 				exit(0);
+			case 'f':
+				crtfile = 1;
+				break;
+			case 'd':
+				crtdir = 1;
+				break;
+			case 'F':
+				force = 1;
+				break;
 			case '?':
 				usage(basename(argv[0]));
 		}
 
-	/* Check if already running */
-	int lockfd;
+	if (crtfile && crtdir)
+		err_quit("the option '-f' and '-d' is exclusive");
 
-	if ((lockfd = open(LOCKFILE, O_RDWR|O_CREAT, 0644)) < 0)
-		err_sys("open() lockfd error");
-	already_running(lockfd);
+	if (!force) {
+		/* Check if already running */
+		int lockfd;
+
+		if ((lockfd = open(LOCKFILE, O_RDWR | O_CREAT, 0644)) < 0)
+			err_sys("open() lockfd error");
+		already_running(lockfd);
+	}
+
+	/* Get the start time */
+	struct timeval tv;
+	if (gettimeofday(&tv, (struct timezone *)NULL) < 0)
+		err_sys("gettimeofday() error");
+	sec = (time_t) tv.tv_sec;
+	tm = localtime(&sec);
+	strftime(tmbuf, sizeof(tmbuf), "%Y-%m-%d %H:%M:%S", tm);
+	err_msg("%s.%.06d process %d started", tmbuf, tv.tv_usec, getpid());
 
 	if (pipe(pipefd) < 0)
 		err_sys("pipe() error");
+
+	/* ensure the SIGHUP is not ignored*/
+	sa.sa_handler = SIG_DFL;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	if (sigaction(SIGHUP, &sa, NULL) < 0)
+		err_quit("sigaction SIGHUP failed");
+
+	/* reread the configuration via thread */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGTERM);
+	sigaddset(&mask, SIGHUP);
+	if ((ret = pthread_sigmask(SIG_BLOCK, &mask, NULL)) != 0) {
+		errno = ret;
+		err_sys("pthread_sigmask error");
+	}
+
+	if ((ret = pthread_create(&tid, NULL, thr_fn, 0)) != 0) {
+		errno = ret;
+		err_sys("pthread_create error");
+	}
 
 	for (i = 0, j = optind; j < argc; i++, j++) {
 		if (i >= MAXFILES)
@@ -417,14 +449,11 @@ START:
 							FD_CLR(*pfd, &rset);
 							*pfd = -1;
 							err_msg("Recreate object.");
-							if ((start = times(&tms)) < 0)
-								err_sys("times() error");
+							if (gettimeofday(&tv, (struct timezone *)NULL) < 0)
+								err_sys("gettimeofday() error");
+							basetime = daytime();
 RETRY:
-							if ((end = times(&tms)) < 0)
-								err_sys("times() error");
-							if (clktck == 0 && (clktck = sysconf(_SC_CLK_TCK)) < 0)
-								err_sys("sysconf() error");
-							if ((end-start) / clktck > TIMEOUT) {
+							if (daytime() - basetime > TIMEOUT * 1000) {
 								err_msg("Recreate object timed out.\n");
 								continue;
 							}

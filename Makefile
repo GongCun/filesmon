@@ -2,17 +2,20 @@ CC = gcc
 CCV = $(shell ${CC} --version | grep '^gcc')
 CFLAGS = -D_DEBUG -g -Wall -lpthread
 SYSINFO = $(shell echo `uname -s` `oslevel`)
-VERSION = $(shell grep '\$$Id' main.c | awk '{print $$4}')
+## git tag | tail -1 >./version
+VERSION = $(shell cat ./version)
+INSTALL_PATH = /usr/local/bin
 
 PROGS = filesmon
 SRC = main.c error.c funcs.c
+HEAD = filesmon.h
 
 all: ${PROGS}
 
-filesmon: ${SRC} version.h
+filesmon: ${SRC} ${HEAD} version.h
 	${CC} ${CFLAGS} -o $@ ${SRC}
 
-version.h: main.c
+version.h: $(SRC) $(HEAD)
 	@echo Constructing version.h
 	@rm -f version.h
 	@echo '#define FILESMON_CC "${CC}"' > version.h
@@ -22,8 +25,14 @@ version.h: main.c
 	@echo '#define FILESMON_SYSINFO "${SYSINFO}"' >> version.h
 	@echo '#define FILESMON_VERSION "${VERSION}"' >> version.h
 	@echo '#define FILESMON_COPYRIGHT \
-		"Copyright (c) 2016 Gong Cun <gongcunjust@gmail.com>"' >> version.h
-	@touch -r main.c version.h
+		"Copyright (c) '`date "+%Y"`' Gong Cun <gong_cun@bocmacau.com>"' >> version.h
+
+install: ${PROGS}
+	@echo Copy to ${INSTALL_PATH}
+	[ -d $(INSTALL_PATH)/ ] || \
+		(mkdir -p $(INSTALL_PATH)/; chmod 755 $(INSTALL_PATH)/)
+	install -s -S -f $(INSTALL_PATH)/ -M 755 -O root -G system ${PROGS}
+
 
 clean:
 	rm -r -f ${PROGS} *.o *.BAK *~ core

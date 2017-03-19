@@ -29,12 +29,41 @@ char *mk_subdir(char *path, char *mon, int size)
 {
 	char cmd[PATH_MAX];
 	struct stat buf;
+	int ret;
+	char *parent;
+	mode_t mode;
+	int fd;
 
 	if (path[strlen(path)-1] == '/')
 		path[strlen(path)-1] = 0;
 
-	if (stat(path, &buf) < 0)
-		err_sys("stat() %s error", path);
+	if (stat(path, &buf) < 0) {
+		if (errno != ENOENT || !(crtfile || crtdir))
+			err_sys("stat() %s error", path, errno);
+		parent = dirname(path);
+		if ((ret = stat(parent, &buf)) < 0 && errno != ENOENT)
+			err_sys("stat() error");
+		if (ret == 0 && !S_ISDIR(buf.st_mode))
+			err_quit("Can't mkdir on %s", parent);
+		if (ret < 0) { /* make parent dir if don't exist */
+			snprintf(cmd, sizeof(cmd), "/usr/bin/mkdir -p %s", parent);
+			if (system(cmd) != 0)
+				err_quit("system() error");
+		}
+		mode = umask(0);
+		if (crtfile) {
+			if ((fd = open(path, O_CREAT|O_RDWR, 0777 & ~mode)) < 0)
+				err_sys("create %s error", path);
+			if (close(fd) < 0)
+				err_sys("close %s error", path);
+		} else { /* create dir */
+			if (mkdir(path, 0755 & ~mode & 0777) < 0)
+				err_sys("create %s error", path);
+		}
+		umask(mode);
+		if (stat(path, &buf) < 0)
+			err_sys("stat() %s error", path);
+	}
 
 	if (S_ISREG(buf.st_mode)) {
 		snprintf(cmd, sizeof(cmd), "/usr/bin/mkdir -p %s/%s", MODFILE_MON_FACTORY, dirname(path));
